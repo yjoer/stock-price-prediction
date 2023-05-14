@@ -1,0 +1,8 @@
+jupyterlab >= 4.0.0rc1
+matplotlib
+mplfinance
+scikit-learn
+scipy
+seaborn
+statsmodels
+yfinance
