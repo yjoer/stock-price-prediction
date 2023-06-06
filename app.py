@@ -215,8 +215,8 @@ elif st.session_state["input_mode"] == "period":
 
 end_close = df_selected["Predicted Close"][-1]
 
-delta = np.round((start_close - end_close) / start_close * 100, 2)
-delta_actual = np.round((start_close - end_close_actual) / start_close * 100, 2)
+delta = np.round((end_close - start_close) / start_close * 100, 2)
+delta_actual = np.round((end_close_actual - start_close) / start_close * 100, 2)
 
 col1.metric(
     label="Symbol",
