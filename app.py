@@ -12,6 +12,7 @@ from sklearn.metrics import (
     mean_squared_error,
     r2_score,
 )
+from statsmodels.tsa.arima.model import ARIMA
 from tensorflow import keras
 
 
@@ -21,8 +22,35 @@ def get_data():
 
     df["Date"] = pd.to_datetime(df["Date"])
     df.set_index("Date", inplace=True)
-
+    df.index = df.index.to_period("D")
     df.drop("2023-04-20", axis=0, inplace=True)
+
+    df_add = pd.read_csv("klse_june.csv")
+    df_add["Date"] = pd.to_datetime(df_add["Date"])
+    df_add.set_index("Date", inplace=True)
+    df_add.index = df_add.index.to_period("D")
+
+    df = pd.concat([df, df_add])
+
+    start_date = df.index[0].to_timestamp()
+    end_date = df.index[-1].to_timestamp()
+
+    new_dates = pd.date_range(start=start_date, end=end_date, freq="D").to_period("D")
+    df = df.reindex(new_dates)
+
+    df.drop("Dividends", axis=1, inplace=True)
+    df.drop("Stock Splits", axis=1, inplace=True)
+
+    return df
+
+
+@st.cache_data
+def get_intraday_data():
+    df = pd.read_csv("klse_2T.csv")
+
+    df["Datetime"] = pd.to_datetime(df["Datetime"])
+    df.set_index("Datetime", inplace=True)
+    df.index = df.index.to_period("2T")
 
     df.drop("Dividends", axis=1, inplace=True)
     df.drop("Stock Splits", axis=1, inplace=True)
@@ -57,6 +85,18 @@ def load_lstm_model():
     return lstm_256
 
 
+def train_arima_daily_model(X_train):
+    model = ARIMA(X_train, order=(2, 1, 2))
+
+    return model.fit()
+
+
+def train_arima_intraday_model(X_train):
+    model = ARIMA(X_train, order=(2, 1, 2))
+
+    return model.fit()
+
+
 def reg_scores(y_test, y_pred):
     return {
         "MAE": mean_absolute_error(y_test, y_pred),
@@ -67,44 +107,103 @@ def reg_scores(y_test, y_pred):
     }
 
 
+st.set_page_config(initial_sidebar_state="collapsed")
+
+with st.sidebar:
+    train_daily = st.button("Train Daily")
+
+    if train_daily:
+        df = get_data()
+        start_date = pd.to_datetime("2023-04-20").to_period("D")
+        X = df.loc[df.index < start_date, ["Close"]]
+
+        model = train_arima_daily_model(X)
+        pickle.dump(model, open("artifacts/arima_daily.pkl", "wb"))
+
+    train_intraday = st.button("Train Intraday")
+
+    if train_intraday:
+        df = get_intraday_data()
+
+        model = train_arima_intraday_model(X)
+        pickle.dump(model, open("artifacts/arima_intraday.pkl", "wb"))
+
 df = get_data()
+df_intraday = get_intraday_data()
 
-X_scaler, y_scaler = load_scaler()
+st.markdown("## Daily Stock Price Predictions")
 
-X = X_scaler.transform(df.iloc[:, [0, 1, 2, 4]])
-y = y_scaler.transform(df.iloc[:, [3]])
+col1, col2, col3, col4 = st.columns([3, 1, 3, 2])
 
-lstm_256 = load_lstm_model()
+if "input_mode" not in st.session_state:
+    st.session_state["input_mode"] = "period"
 
-st.markdown("## Same-Day Predictions")
 
-date_range = st.date_input(
-    label="Date Range",
-    value=(datetime.date(2023, 1, 1), datetime.date(2023, 4, 19)),
+def date_range_callback():
+    st.session_state["input_mode"] = "range"
+
+
+def date_period_callback():
+    st.session_state["input_mode"] = "period"
+
+
+date_range = col1.date_input(
+    label="Select a Date Range",
+    on_change=date_range_callback,
+    value=(datetime.date(2023, 4, 16), datetime.date(2023, 4, 23)),
 )
 
-date_range = pd.to_datetime(date_range)
-date_range = date_range.tz_localize(tz="Asia/Kuala_Lumpur")
+col2.markdown(
+    '<div style="margin: 24px 0; text-align: center;">OR</div>',
+    unsafe_allow_html=True,
+)
+
+start_date, period = col3.date_input(
+    label="Select a Start Date",
+    on_change=date_period_callback,
+    value=datetime.date(2023, 4, 16),
+), col4.number_input(
+    label="Period (Days)",
+    min_value=1,
+    on_change=date_period_callback,
+    value=7,
+    step=1,
+)
 
 if len(date_range) < 2:
     st.stop()
 
+date_range = pd.to_datetime(date_range).to_period("D")
+start_date = pd.to_datetime(start_date).to_period("D")
 
-date_range_mask = (df.index > date_range[0]) & (df.index < date_range[1])
+if st.session_state["input_mode"] == "range":
+    date_range_mask = (df.index >= date_range[0]) & (df.index <= date_range[1])
+elif st.session_state["input_mode"] == "period":
+    date_range_mask = (df.index >= start_date) & (df.index <= start_date + period - 1)
+
 df_selected = df.loc[date_range_mask]
-index_values = [df.index.get_loc(date) for date in df_selected.index]
-
-if len(index_values) == 0:
-    st.stop()
-
-if len(index_values) > 0 and index_values[0] - 60 < 0:
-    st.stop()
 
 st.markdown("### Predictions")
 
-X_test_scaled_60d, y_test_scaled_shifted = prepare_lstm(X, y, index_values)
-y_pred = y_scaler.inverse_transform(lstm_256.predict(X_test_scaled_60d))
-df_selected["Predicted Close"] = y_pred
+arima_daily = pickle.load(open("artifacts/arima_daily.pkl", "rb"))
+
+start_index = 0
+end_index = 0
+
+if st.session_state["input_mode"] == "range":
+    start_index = (date_range[0] - df.index[0]).n
+    end_index = (date_range[1] - df.index[0]).n
+elif st.session_state["input_mode"] == "period":
+    start_index = (start_date - df.index[0]).n
+    end_index = start_index + period - 1
+
+
+y_pred = arima_daily.predict(start=start_index, end=end_index)
+
+df_selected = df_selected.combine_first(
+    pd.DataFrame(y_pred, columns=["predicted_mean"])
+)
+df_selected.rename(columns={"predicted_mean": "Predicted Close"}, inplace=True)
 df_selected["Deviation"] = df_selected["Predicted Close"] - df_selected["Close"]
 
 p = figure(x_axis_type="datetime")
@@ -131,7 +230,13 @@ col1, col2 = st.columns([1, 3])
 
 col1.markdown("### Errors")
 
-scores = reg_scores(y_pred, y_scaler.inverse_transform(y_test_scaled_shifted))
+scores_df = df_selected[["Close", "Predicted Close"]].dropna()
+
+if len(scores_df) == 0:
+    st.text("The ground truth is not available for error calculation.")
+    st.stop()
+
+scores = reg_scores(scores_df["Close"], scores_df["Predicted Close"])
 scores = pd.DataFrame(scores, index=["Scores"]).T
 col1.table(scores)
 

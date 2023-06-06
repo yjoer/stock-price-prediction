@@ -3,6 +3,7 @@ bokeh==2.4.3
 jupyterlab >= 4.0.0rc1
 matplotlib
 mplfinance
+pmdarima
 scikit-learn
 scipy
 seaborn
