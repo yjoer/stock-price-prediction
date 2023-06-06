@@ -183,8 +183,6 @@ elif st.session_state["input_mode"] == "period":
 
 df_selected = df.loc[date_range_mask]
 
-st.markdown("### Predictions")
-
 arima_daily = pickle.load(open("artifacts/arima_daily.pkl", "rb"))
 
 start_index = 0
@@ -197,14 +195,41 @@ elif st.session_state["input_mode"] == "period":
     start_index = (start_date - df.index[0]).n
     end_index = start_index + period - 1
 
-
-y_pred = arima_daily.predict(start=start_index, end=end_index)
+predictions = arima_daily.get_prediction(start=start_index, end=end_index)
+y_pred = predictions.predicted_mean
 
 df_selected = df_selected.combine_first(
     pd.DataFrame(y_pred, columns=["predicted_mean"])
 )
 df_selected.rename(columns={"predicted_mean": "Predicted Close"}, inplace=True)
 df_selected["Deviation"] = df_selected["Predicted Close"] - df_selected["Close"]
+
+col1, col2, col3 = st.columns([1, 1, 1])
+
+if st.session_state["input_mode"] == "range":
+    start_close = df[df.index <= date_range[0]]["Close"].dropna()[-1]
+    end_close_actual = df[df.index <= date_range[1]]["Close"].dropna()[-1]
+elif st.session_state["input_mode"] == "period":
+    start_close = df[df.index <= start_date]["Close"].dropna()[-1]
+    end_close_actual = df[df.index <= start_date + period - 1]["Close"].dropna()[-1]
+
+end_close = df_selected["Predicted Close"][-1]
+
+delta = np.round((start_close - end_close) / start_close * 100, 2)
+delta_actual = np.round((start_close - end_close_actual) / start_close * 100, 2)
+
+col1.metric(
+    label="Symbol",
+    value="^KLSE",
+    delta=f"{len(df.dropna())} Days Traded",
+    delta_color="off",
+)
+col2.metric(label="Predicted Close", value=np.round(end_close, 4), delta=f"{delta}%")
+col3.metric(
+    label="Actual Close",
+    value=np.round(end_close_actual, 4),
+    delta=f"{delta_actual}%",
+)
 
 p = figure(x_axis_type="datetime")
 
@@ -222,6 +247,18 @@ p.line(
     color=Category10[3][1],
     line_width=2,
 )
+
+show_ci = st.checkbox(label="Show 95% Confidence Interval")
+
+if show_ci:
+    bounds = predictions.conf_int(0.05)
+    lower, upper = bounds["lower Close"], bounds["upper Close"]
+
+    reverse_upper = upper[::-1]
+    close_range = np.append(lower, reverse_upper)
+    dates = np.append(df_selected.index, df_selected.index[::-1])
+
+    p.patch(dates, close_range, color=Category10[3][1], fill_alpha=0.3)
 
 st.bokeh_chart(p, use_container_width=True)
 st.dataframe(df_selected)
