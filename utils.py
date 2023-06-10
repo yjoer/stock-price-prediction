@@ -16,6 +16,9 @@ def prepare():
     df.drop("Dividends", axis=1, inplace=True)
     df.drop("Stock Splits", axis=1, inplace=True)
 
+    df["Next Close"] = df["Close"].shift(-1)
+    df.loc["2023-04-19", "Next Close"] = 1422.10998535156
+
     train_test_point = int(len(df) * 0.8)
 
     train_df = df.iloc[:train_test_point]
@@ -25,10 +28,10 @@ def prepare():
     y_scaler = StandardScaler()
 
     X_train_scaled = X_scaler.fit_transform(train_df.iloc[:, [0, 1, 2, 4]])
-    y_train_scaled = y_scaler.fit_transform(train_df.iloc[:, [3]])
+    y_train_scaled = y_scaler.fit_transform(train_df.iloc[:, [5]])
 
     X_test_scaled = X_scaler.transform(test_df.iloc[:, [0, 1, 2, 4]])
-    y_test_scaled = y_scaler.transform(test_df.iloc[:, [3]])
+    y_test_scaled = y_scaler.transform(test_df.iloc[:, [5]])
 
     return (
         X_train_scaled,
